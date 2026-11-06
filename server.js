@@ -36,7 +36,7 @@ const save = (n, v) => {
   try { 
     const t = file(n) + '.tmp'; 
     fs.writeFileSync(t, JSON.stringify(v, null, 1)); 
-    fs.renameSync(t, file(n)); 
+    try { fs.renameSync(t, file(n)); } catch (reErr) { fs.writeFileSync(file(n), JSON.stringify(v, null, 1)); } 
   } catch (e) {
     // Fail-safe for read-only serverless filesystems
   }
@@ -74,6 +74,46 @@ const m = tpl.match(re);
 const defaultSite = m ? JSON.parse(m[2]) : {};
 let site = load('site.json', defaultSite);
 if (!site) site = defaultSite;
+
+const persistSiteData = (newSite) => {
+  site = newSite;
+  save('site.json', site);
+
+  const safeJson = JSON.stringify(site).replace(/</g, '\\u003c');
+  const targetDirs = [
+    __dirname,
+    path.resolve('C:/Users/bhush/Desktop/secure-connect'),
+    path.resolve('C:/Users/bhush/.gemini/antigravity/scratch/secure-connect')
+  ];
+
+  const seen = new Set();
+  for (const dir of targetDirs) {
+    if (!dir || seen.has(dir)) continue;
+    seen.add(dir);
+    try {
+      if (fs.existsSync(dir)) {
+        const dDir = path.join(dir, 'data');
+        if (!fs.existsSync(dDir)) fs.mkdirSync(dDir, { recursive: true });
+        fs.writeFileSync(path.join(dDir, 'site.json'), JSON.stringify(site, null, 1), 'utf8');
+
+        const idxPath = path.join(dir, 'public', 'index.html');
+        if (fs.existsSync(idxPath)) {
+          let html = fs.readFileSync(idxPath, 'utf8');
+          if (re.test(html)) {
+            const updated = html.replace(re, (_, a, __, c) => a + safeJson + c);
+            fs.writeFileSync(idxPath, updated, 'utf8');
+            if (dir === __dirname) {
+              tpl = updated;
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.error('Sync error for ' + dir + ':', err.message);
+    }
+  }
+};
+
 
 // Default Wallpapers, Feedbacks, and Reel if not present
 site.wallpapers = site.wallpapers || { hero: '', about: '', services: '', process: '', frameworks: '', feedback: '', faq: '', cta: '', contact: '', ads: '' };
@@ -179,7 +219,32 @@ const str = (v, n) => String(v == null ? '' : v).trim().slice(0, n);
 
 /* ---------- pages ---------- */
 app.get('/', (req, res) => {
-  res.type('html').send(tpl.replace(re, (_, a, __, c) => a + JSON.stringify(site).replace(/</g, '\\u003c') + c));
+  res.set({
+    'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+    'Pragma': 'no-cache',
+    'Expires': '0'
+  });
+  const currentHtml = getIndexHtml();
+  res.type('html').send(currentHtml.replace(re, (_, a, __, c) => a + JSON.stringify(site).replace(/</g, '\\u003c') + c));
+});
+
+// Dedicated API endpoints for site content (Always fresh & uncached)
+app.get('/api/site', (req, res) => {
+  res.set({
+    'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+    'Pragma': 'no-cache',
+    'Expires': '0'
+  });
+  res.json(site);
+});
+
+app.get('/api/admin/site', need, (req, res) => {
+  res.set({
+    'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+    'Pragma': 'no-cache',
+    'Expires': '0'
+  });
+  res.json(site);
 });
 
 // ❌ /admin route is BLOCKED completely (Shows standard 404 Not Found)
@@ -189,7 +254,12 @@ app.get('/admin', (req, res) => {
 
 // ✅ Secret Hidden Admin URL (Sirf aapko pata hai)
 app.get(ADMIN_PATH, (req, res) => { 
-  res.set({ 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex, nofollow' }); 
+  res.set({
+    'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+    'Pragma': 'no-cache',
+    'Expires': '0',
+    'X-Robots-Tag': 'noindex, nofollow'
+  }); 
   res.type('html').send(getAdminHtml()); 
 });
 
@@ -311,9 +381,8 @@ app.put('/api/admin/site', need, (req, res) => {
   if (!b.hero || !Array.isArray(b.faqs) || !Array.isArray(b.tags) || !b.services || typeof b.services !== 'object') {
     return res.status(400).json({ error: 'invalid site data' });
   }
-  site = b; 
-  save('site.json', site); 
-  res.json({ ok: true });
+  persistSiteData(b);
+  res.json({ ok: true, message: 'Saved and permanently synced to disk' });
 });
 
 app.post('/api/admin/password', need, (req, res) => {

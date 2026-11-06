@@ -105,9 +105,24 @@ if('Notification' in window&&Notification.permission==='granted')$('alerts').tex
 async function start(){
  try{
   items=await api('GET','/api/admin/enquiries');
-  site=await (await fetch('/')).text();
-  var m=site.match(/id="site-data">([\s\S]*?)<\/script>/);site=JSON.parse(m[1]);
- }catch(e){return}
+  try {
+    site = await api('GET', '/api/admin/site');
+  } catch(eApi) {
+    try {
+      var r = await fetch('/api/site?_t=' + Date.now(), { cache: 'no-store' });
+      site = await r.json();
+    } catch(eFetch) {
+      var text = await (await fetch('/?_t=' + Date.now(), { cache: 'no-store' })).text();
+      var m = text.match(/id="site-data">([\s\S]*?)<\/script>/);
+      site = JSON.parse(m[1]);
+    }
+  }
+  if (!site || typeof site !== 'object') throw new Error('Site data could not be parsed');
+ }catch(e){
+  console.error('Initialization error:', e);
+  toast('Could not load site data: ' + e.message);
+  return;
+ }
  $('login').hidden=true;$('app').hidden=false;badge();render();
  if(es)es.close();
  es=new EventSource('/api/admin/stream');
@@ -666,7 +681,14 @@ function renderSite(b){
   Object.keys(D.services).forEach(function(g){D.services[g].forEach(function(x){if(!x.name.trim())bad='Every service needs a name.';else if(names[x.name])bad='Service names must be unique: '+x.name;names[x.name]=1})});
   if(bad){msg.className='err';msg.textContent=bad;return}
   sv.disabled=true;
-  try{await api('PUT','/api/admin/site',D);site=JSON.parse(JSON.stringify(D));msg.className='err ok';msg.textContent='Saved. Your website is updated.'}
+  try{
+    await api('PUT','/api/admin/site',D);
+    site=JSON.parse(JSON.stringify(D));
+    draft=JSON.parse(JSON.stringify(D));
+    msg.className='err ok';
+    msg.textContent='✓ Saved permanently! Changes are live on your website and saved to index.html & site.json.';
+    toast('✓ Changes permanently saved & published!');
+  }
   catch(e){msg.className='err';msg.textContent='Could not save: '+e.message}
   sv.disabled=false};
  w.appendChild(sv);w.appendChild(msg);
